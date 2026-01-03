@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Reflex Grid</title>
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --accent: #00f2ff;
+            --danger-mid: #ffcc00;
+            --danger-high: #ff3333;
+            --text: #ffffff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            aspect-ratio: 1/1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            width: 90%;
+            height: 90%;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 5%;
+            pointer-events: none;
+        }
+
+        .stat {
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            text-align: center;
+            padding: 20px;
+        }
+
+        h1 { margin: 0 0 10px 0; color: var(--accent); }
+        p { margin: 0 0 20px 0; opacity: 0.8; }
+
+        button {
+            padding: 12px 30px;
+            font-size: 1.1rem;
+            background: var(--accent);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.1s;
+        }
+
+        button:active { transform: scale(0.95); }
+
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            opacity: 0.5;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div class="stat">SCORE: <span id="scoreVal">0</span></div>
+            <div class="stat">TIME: <span id="timeVal">0.0</span>s</div>
+        </div>
+
+        <div id="overlay">
+            <h1 id="overlayTitle">REFLEX GRID</h1>
+            <p id="overlayDesc">Avoid the flashing tiles.<br>WASD or Arrows to move.</p>
+            <button id="startBtn">START SYSTEM</button>
+        </div>
+    </div>
+
+    <div id="controls-hint">DASH: SPACE (0.5s Cooldown)</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreVal = document.getElementById('scoreVal');
+        const timeVal = document.getElementById('timeVal');
+        const overlay = document.getElementById('overlay');
+        const overlayTitle = document.getElementById('overlayTitle');
+        const overlayDesc = document.getElementById('overlayDesc');
+        const startBtn = document.getElementById('startBtn');
+
+        // Game Config
+        const GRID_SIZE = 5;
+        const TILE_GAP = 4;
+        let canvasSize = 0;
+        let tileSize = 0;
+
+        let gameState = 'START'; // START, PLAYING, GAMEOVER
+        let score = 0;
+        let startTime = 0;
+        let lastTime = 0;
+        let shakeAmount = 0;
+
+        const player = {
+            gridX: 2,
+            gridY: 2,
+            targetX: 2,
+            targetY: 2,
+            renderX: 2,
+            renderY: 2,
+            dashCooldown: 0,
+            color: '#00f2ff'
+        };
+
+        let tiles = [];
+        let difficultyLevel = 1;
+        let lastTileTrigger = 0;
+
+        function initGrid() {
+            tiles = [];
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    tiles.push({
+                        x, y,
+                        state: 'SAFE', // SAFE, WARNING_MID, WARNING_HIGH, LETHAL
+                        timer: 0,
+                        opacity: 0
+                    });
+                }
+            }
+        }
+
+        function resize() {
+            canvasSize = Math.min(window.innerWidth * 0.9, 600);
+            canvas.width = canvasSize;
+            canvas.height = canvasSize;
+            tileSize = (canvasSize - (TILE_GAP * (GRID_SIZE + 1))) / GRID_SIZE;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Controls
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            if (gameState !== 'PLAYING') return;
+            
+            const prevX = player.gridX;
+            const prevY = player.gridY;
+
+            if (e.key === 'ArrowUp' || e.key === 'w') player.gridY--;
+            if (e.key === 'ArrowDown' || e.key === 's') player.gridY++;
+            if (e.key === 'ArrowLeft' || e.key === 'a') player.gridX--;
+            if (e.key === 'ArrowRight' || e.key === 'd') player.gridX++;
+
+            // Dash
+            if (e.code === 'Space' && player.dashCooldown <= 0) {
+                // Determine direction based on last input or current movement?
+                // For simplicity, we'll just allow a 2-tile jump in current move direction if key pressed
+                // But pure reflex grid is usually 1 step. Let's keep it 1 step for "Pure Skill" as requested.
+            }
+
+            // Boundary Check
+            player.gridX = Math.max(0, Math.min(GRID_SIZE - 1, player.gridX));
+            player.gridY = Math.max(0, Math.min(GRID_SIZE - 1, player.gridY));
+            
+            player.targetX = player.gridX;
+            player.targetY = player.gridY;
+        });
+
+        // Touch support
+        let touchStartX = 0;
+        let touchStartY = 0;
+        canvas.addEventListener('touchstart', e => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        });
+
+        canvas.addEventListener('touchend', e => {
+            if (gameState !== 'PLAYING') return;
+            const dx = e.changedTouches[0].clientX - touchStartX;
+            const dy = e.changedTouches[0].clientY - touchStartY;
+            const absX = Math.abs(dx);
+            const absY = Math.abs(dy);
+
+            if (Math.max(absX, absY) > 20) {
+                if (absX > absY) {
+                    player.gridX += dx > 0 ? 1 : -1;
+                } else {
+                    player.gridY += dy > 0 ? 1 : -1;
+                }
+                player.gridX = Math.max(0, Math.min(GRID_SIZE - 1, player.gridX));
+                player.gridY = Math.max(0, Math.min(GRID_SIZE - 1, player.gridY));
+            }
+        });
+
+        function triggerDanger() {
+            const count = Math.min(GRID_SIZE * 2, 2 + Math.floor(difficultyLevel / 2));
+            const available = tiles.filter(t => t.state === 'SAFE');
+            
+            for (let i = 0; i < count; i++) {
+                if (available.length === 0) break;
+                const idx = Math.floor(Math.random() * available.length);
+                const tile = available.splice(idx, 1)[0];
+                
+                tile.state = 'WARNING_MID';
+                tile.timer = Math.max(400, 1000 - (difficultyLevel * 50));
+            }
+        }
+
+        function update(time) {
+            const dt = time - lastTime;
+            lastTime = time;
+
+            if (gameState === 'PLAYING') {
+                const elapsed = (time - startTime) / 1000;
+                timeVal.textContent = elapsed.toFixed(1);
+                score = Math.floor(elapsed * 10);
+                scoreVal.textContent = score;
+
+                // Difficulty scaling
+                difficultyLevel = 1 + Math.floor(elapsed / 5);
+
+                // Spawn logic
+                if (time - lastTileTrigger > Math.max(500, 1500 - (difficultyLevel * 100))) {
+                    triggerDanger();
+                    lastTileTrigger = time;
+                }
+
+                // Tile states
+                tiles.forEach(tile => {
+                    if (tile.state !== 'SAFE') {
+                        tile.timer -= dt;
+                        if (tile.timer <= 0) {
+                            if (tile.state === 'WARNING_MID') {
+                                tile.state = 'WARNING_HIGH';
+                                tile.timer = Math.max(200, 500 - (difficultyLevel * 30));
+                            } else if (tile.state === 'WARNING_HIGH') {
+                                tile.state = 'LETHAL';
+                                tile.timer = 800; // Duration of lethality
+                            } else if (tile.state === 'LETHAL') {
+                                tile.state = 'SAFE';
+                            }
+                        }
+                    }
+                });
+
+                // Collision check
+                const currentTile = tiles.find(t => t.x === player.gridX && t.y === player.gridY);
+                if (currentTile && currentTile.state === 'LETHAL') {
+                    gameOver();
+                }
+
+                // Screen shake decay
+                shakeAmount *= 0.9;
+            }
+
+            // Lerp player
+            player.renderX += (player.gridX - player.renderX) * 0.3;
+            player.renderY += (player.gridY - player.renderY) * 0.3;
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            if (shakeAmount > 0.1) {
+                ctx.translate(Math.random() * shakeAmount - shakeAmount/2, Math.random() * shakeAmount - shakeAmount/2);
+            }
+
+            // Draw Tiles
+            tiles.forEach(tile => {
+                const px = TILE_GAP + tile.x * (tileSize + TILE_GAP);
+                const py = TILE_GAP + tile.y * (tileSize + TILE_GAP);
+                
+                let color = '#1a1a1f';
+                if (tile.state === 'WARNING_MID') color = '#ffcc00';
+                if (tile.state === 'WARNING_HIGH') color = '#ff6600';
+                if (tile.state === 'LETHAL') color = '#ff3333';
+
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.roundRect(px, py, tileSize, tileSize, 4);
+                ctx.fill();
+
+                // Inner glow for lethal
+                if (tile.state === 'LETHAL') {
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff3333';
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            });
+
+            // Draw Player
+            const pSize = tileSize * 0.6;
+            const px = TILE_GAP + player.renderX * (tileSize + TILE_GAP) + (tileSize - pSize) / 2;
+            const py = TILE_GAP + player.renderY * (tileSize + TILE_GAP) + (tileSize - pSize) / 2;
+
+            ctx.fillStyle = player.color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = player.color;
+            ctx.beginPath();
+            ctx.roundRect(px, py, pSize, pSize, 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            ctx.restore();
+        }
+
+        function gameOver() {
+            gameState = 'GAMEOVER';
+            shakeAmount = 15;
+            overlay.style.display = 'flex';
+            overlayTitle.textContent = 'SYSTEM CRASHED';
+            overlayDesc.innerHTML = `Final Score: ${score}<br>Time Survived: ${timeVal.textContent}s`;
+            startBtn.textContent = 'REBOOT';
+        }
+
+        function startGame() {
+            initGrid();
+            player.gridX = 2;
+            player.gridY = 2;
+            player.renderX = 2;
+            player.renderY = 2;
+            score = 0;
+            difficultyLevel = 1;
+            startTime = performance.now();
+            lastTileTrigger = startTime;
+            gameState = 'PLAYING';
+            overlay.style.display = 'none';
+        }
+
+        startBtn.addEventListener('click', startGame);
+
+        requestAnimationFrame(update);
+    </script>
+</body>
+</html>
